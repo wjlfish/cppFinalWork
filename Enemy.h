@@ -62,14 +62,28 @@ public:
 };
 
 // 在 Enemy.h 末尾添加：
-
 class Dragon : public Enemy {
+private:
+    int moveToken; // 用于计算回合数
+
 public:
     Dragon(int x, int y) 
-        : Enemy(x, y, "D", "Dragon", 50, 15, 5, Color::RED) {}
+        // 龙：符号 'D', 血厚攻高，红色
+        : Enemy(x, y, "D", "Dragon", 50, 15, 5, Color::RED), moveToken(0) {}
 
     void onTurn(Map& map, std::vector<Creature*>& others) override {
-        // 1. 寻找玩家位置
+        // --- 1. 速度削弱逻辑 ---
+        moveToken++;
+        // 只有偶数回合才行动 (0, 2, 4...)，奇数回合休息
+        // 这意味着巨龙的速度是玩家的 0.5 倍
+        if (moveToken % 2 != 0) {
+            // 可以选择性加一句日志让玩家知道龙在休息，或者什么都不做
+            return; 
+        }
+
+        // --- 以下是之前的智能寻路逻辑，保持不变 ---
+        
+        // 1. 寻找玩家
         Creature* player = nullptr;
         for (auto* c : others) {
             if (c->getName() == "Hero") {
@@ -77,7 +91,7 @@ public:
                 break;
             }
         }
-        if (!player) return; // 没找到玩家
+        if (!player) return;
 
         // 2. 计算理想方向
         int dx = 0, dy = 0;
@@ -87,48 +101,31 @@ public:
         if (pos.y < player->getPosition().y) dy = 1;
         else if (pos.y > player->getPosition().y) dy = -1;
 
-        // --- 3. 智能移动尝试逻辑 ---
-        
-        // 定义一个 lambda 函数来尝试移动，成功返回 true
+        // 3. 智能移动尝试 (复用之前的 lambda)
         auto tryMove = [&](int tryDx, int tryDy) -> bool {
             if (tryDx == 0 && tryDy == 0) return false;
-            
             int targetX = pos.x + tryDx;
             int targetY = pos.y + tryDy;
-
-            // 检查地形
             if (!map.isWalkable(targetX, targetY)) return false;
-
-            // 检查生物碰撞
             for (auto* other : others) {
                 if (other == this) continue;
                 if (other->getPosition().x == targetX && other->getPosition().y == targetY) {
-                    // 如果挡路的是玩家，攻击！
                     if (other->getName() == "Hero") {
                         attack(other);
-                        MessageLog::add(Color::RED + "巨龙吐息！造成巨大伤害！" + Color::RESET);
-                        return true; // 攻击也算作一次行动成功
+                        MessageLog::add(Color::RED + "巨龙喷出了烈焰！" + Color::RESET);
+                        return true; 
                     }
-                    return false; // 被其他怪物（比如史莱姆）挡住了，不能走
+                    return false; 
                 }
             }
-
-            // 没人没墙，移动成功
             pos.x = targetX;
             pos.y = targetY;
             return true;
         };
 
-        // A计划：尝试理想路径（比如直接走对角线）
         if (tryMove(dx, dy)) return;
-
-        // B计划：如果对角线走不通，尝试只走X轴（滑墙）
         if (dx != 0 && tryMove(dx, 0)) return;
-
-        // C计划：如果X轴也走不通，尝试只走Y轴
         if (dy != 0 && tryMove(0, dy)) return;
-        
-        // 如果都走不通，那只能休息一回合了
     }
 };
 
