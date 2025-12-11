@@ -368,34 +368,38 @@ private:
     }
 
     // --- 7. 存档功能 (加密版) ---
+    // --- 存档功能 (自动创建文件夹版) ---
+    // --- 存档功能 (系统命令版) ---
     void saveGame() {
-        // 1. 序列化：将所有数据拼接成一个字符串
+        // 1. 序列化与加密 (不变)
         std::stringstream ss;
-        ss << currentLevel << " "
-           << difficulty << " "
-           << player->getHp() << " "
-           << player->getMaxHp() << " "
-           << player->getAttack() << " "
-           << gameMode;
+        ss << currentLevel << " " << difficulty << " " 
+           << player->getHp() << " " << player->getMaxHp() << " " 
+           << player->getAttack() << " " << gameMode;
         
         std::string rawData = ss.str();
-        
-        // 2. 加密
         std::string encryptedData = xorCipher(rawData);
         
-        // 3. 写入文件 (注意：使用 .dat 后缀，且开启 binary 模式)
+        // 2. 【核心修改】使用系统命令创建文件夹
+        // 这行代码会让系统去建一个叫 saves 的文件夹
+        // mkdir -p (Mac/Linux) 和 if not exist (Windows) 互不干扰
+        #ifdef _WIN32
+            system("if not exist saves mkdir saves");
+        #else
+            system("mkdir -p saves");
+        #endif
+
+        // 3. 打开文件写入 (不变)
         std::ofstream outFile(getSaveFileName(currentSlot), std::ios::binary); 
         
         if (outFile.is_open()) {
             outFile.write(encryptedData.c_str(), encryptedData.size());
             outFile.close();
-            // 提示信息里带上槽位号
             MessageLog::add(Color::YELLOW + ">>> 进度已保存至槽位 " + std::to_string(currentSlot) + " <<<" + Color::RESET);
         } else {
-            MessageLog::add(Color::RED + "错误：无法写入存档文件！" + Color::RESET);
+            MessageLog::add(Color::RED + "错误：无法写入存档 (权限被拒绝)！" + Color::RESET);
         }
     }
-
     // --- 8. 读档功能 (解密版) ---
     bool loadGame() {
         // 1. 以二进制模式打开
