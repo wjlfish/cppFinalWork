@@ -116,11 +116,15 @@ private:
             std::cout << "1. 新的游戏 (New Game)" << std::endl;
             std::cout << "2. 继续征程 (Load Game)" << std::endl;
             std::cout << "3. 退出游戏 (Exit)" << std::endl;
-            std::cout << "> ";
+            
+            // 【关键修复 1】加上 << std::flush 确保 "> " 能立刻显示
+            std::cout << "> " << std::flush;
             
             char choice = Input::get();
             if (choice == '1') {
-                std::cout << "\n请选择难度 (1:萌新 2:普通 3:受苦): ";
+                // 【关键修复 2】加上 << std::flush 确保这行字立刻显示，不让玩家盲选
+                std::cout << "\n请选择难度 (1:萌新 2:普通 3:受苦): " << std::flush;
+                
                 char diff = Input::get();
                 difficulty = (diff >= '1' && diff <= '3') ? (diff - '0') : 2;
                 return 1;
