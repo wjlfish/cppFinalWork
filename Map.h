@@ -4,7 +4,8 @@
 #include <vector>
 #include <string>
 #include <iostream>
-#include <memory> // 引入智能指针
+#include <memory>
+#include <queue> // 【新增】用于 BFS 寻路算法
 #include "GameObject.h"
 #include "utils.h"
 
@@ -12,68 +13,143 @@ class Map {
 private:
     int width;
     int height;
-    std::vector<std::string> grid; // 存储地形：墙、地板
+    std::vector<std::string> grid; 
 
 public:
-    // 构造函数：初始化地图大小
     Map(int w, int h) : width(w), height(h) {
-        // 初始化一个空地图（全墙壁或者空地）
-        // 这里我们先生成一个简单的围墙房间
         generateDefaultMap();
     }
 
-    // 生成默认地图（暂时硬编码，后续改为读取文件）
     void generateDefaultMap() {
         grid.clear();
         for (int y = 0; y < height; ++y) {
             std::string row = "";
             for (int x = 0; x < width; ++x) {
                 if (y == 0 || y == height - 1 || x == 0 || x == width - 1) {
-                    row += "#"; // 墙壁
+                    row += "#"; 
                 } else {
-                    row += "."; // 地面
+                    row += "."; 
                 }
             }
             grid.push_back(row);
         }
-        
-        // 放置出口
         grid[height-2][width-2] = '>';
     }
 
-    // 判断坐标是否可通行（用于碰撞检测）
     bool isWalkable(int x, int y) const {
         if (x < 0 || x >= width || y < 0 || y >= height) return false;
         char tile = grid[y][x];
-        return tile != '#'; // 不是墙壁就可以走
+        return tile != '#'; 
     }
 
-    // 绘制地图
-    // 这里我们传入一个 GameObject 指针列表，以便在地图上叠加绘制对象
-    // const std::vector<std::unique_ptr<GameObject>>& objects 
-    // 这个参数暂时保留，下一阶段会用到，目前先画地形
-    // 修改 draw 方法签名，接收需要绘制的游戏对象列表
-    // 使用 const std::vector<GameObject*>& 避免拷贝，且利用多态
+    // --- 【新增】BFS 路径检查算法 ---
+    // 检查从 (startX, startY) 是否能走到 (endX, endY)
+    bool hasPath(int startX, int startY, int endX, int endY) {
+        // 1. 如果起点或终点本身就是墙，直接死局
+        if (!isWalkable(startX, startY) || !isWalkable(endX, endY)) return false;
+
+        // 2. 准备访问记录表 (visited)，防止兜圈子
+        std::vector<std::vector<bool>> visited(height, std::vector<bool>(width, false));
+        
+        // 3. BFS 队列
+        std::queue<Point> q;
+        q.push({startX, startY});
+        visited[startY][startX] = true;
+
+        // 4. 方向数组：上下左右
+        int dirs[4][2] = {{0, 1}, {0, -1}, {1, 0}, {-1, 0}};
+
+        while (!q.empty()) {
+            Point curr = q.front();
+            q.pop();
+
+            // 如果到达终点，说明通路存在！
+            if (curr.x == endX && curr.y == endY) return true;
+
+            // 探索四周
+            for (auto& dir : dirs) {
+                int nx = curr.x + dir[0];
+                int ny = curr.y + dir[1];
+
+                // 检查边界、是否是墙、是否访问过
+                if (nx >= 0 && nx < width && ny >= 0 && ny < height && 
+                    isWalkable(nx, ny) && !visited[ny][nx]) {
+                    
+                    visited[ny][nx] = true;
+                    q.push({nx, ny});
+                }
+            }
+        }
+
+        // 5. 队列空了也没找到终点，说明路断了
+        return false;
+    }
+
+    // --- 【修改】生成障碍物 ---
+    // 使用 while 循环，直到生成出一张能通关的地图为止
+    void generateObstacles(int level) {
+        bool pathFound = false;
+        int attempts = 0;
+
+        do {
+            // 1. 重置为空房间
+            generateDefaultMap();
+
+            // 2. 随机撒墙
+            // 随着等级提升，墙壁密度增加，但设置上限防止死循环
+            int obstacleCount = (width * height) / 10 + (level * 5);
+            // 简单的防止密度过大
+            if (obstacleCount > (width * height) * 0.6) obstacleCount = (width * height) * 0.6;
+
+            for (int i = 0; i < obstacleCount; ++i) {
+                int x = rand() % (width - 2) + 1;
+                int y = rand() % (height - 2) + 1;
+
+                // 保护起点和终点不被直接覆盖
+                // 同时保护起点周围一圈，防止出门就被堵死
+                if ((std::abs(x - 1) <= 1 && std::abs(y - 1) <= 1) || 
+                    (x == width - 2 && y == height - 2)) {
+                    continue;
+                }
+                
+                grid[y][x] = '#';
+            }
+
+            // 3. 检查死活：从 (1,1) 到 (width-2, height-2) 有路吗？
+            pathFound = hasPath(1, 1, width - 2, height - 2);
+            
+            attempts++;
+            // 防止极其罕见的无限循环（虽然 BFS 保证了只要有解就能找到）
+            if (attempts > 1000) {
+                // 如果实在随机不出来，就生成一个空地图保底
+                generateDefaultMap();
+                pathFound = true; 
+            }
+
+        } while (!pathFound); // 如果没路，就回滚重来
+        
+        // 可选：在这里打印一下 "Generated map in X attempts" 方便调试
+        // std::cout << "Map generated in " << attempts << " attempts." << std::endl;
+    }
+
     void draw(const std::vector<GameObject*>& objects) const {
         #ifdef _WIN32
             system("cls");
         #else
-            std::cout << "\033[2J\033[1;1H"; // ANSI 清屏并回原点，比 system("clear") 更快更少闪烁
+            std::cout << "\033[2J\033[1;1H"; 
         #endif
 
         for (int y = 0; y < height; ++y) {
             for (int x = 0; x < width; ++x) {
-                // 1. 检查当前坐标 (x, y) 是否有对象
                 bool objectDrawn = false;
                 for (const auto* obj : objects) {
                     if (obj->getPosition().x == x && obj->getPosition().y == y) {
-                        obj->draw(); // 多态调用！如果是玩家画@，是怪物画M
+                        obj->draw();
                         objectDrawn = true;
-                        break; // 假设同一位置只显示一个顶层对象
+                        break;
                     }
                 }
 
-                // 2. 如果没有对象，绘制地图本身
                 if (!objectDrawn) {
                     char tile = grid[y][x];
                     if (tile == '#') {
@@ -86,25 +162,6 @@ public:
                 }
             }
             std::cout << std::endl;
-        }
-    }
-
-    // 生成随机障碍物，难度越高，墙壁越密集
-    void generateObstacles(int level) {
-        // 先清空中间区域（保留四周围墙）
-        generateDefaultMap(); 
-        
-        // 简单的随机算法：level 越高，生成的墙越多
-        int obstacleCount = (width * height) / 10 + (level * 5);
-        
-        for (int i = 0; i < obstacleCount; ++i) {
-            int x = rand() % (width - 2) + 1; // 1 ~ width-2
-            int y = rand() % (height - 2) + 1; // 1 ~ height-2
-            
-            // 不要在出口(width-2, height-2)和起点(1,1)放墙
-            if ((x == 1 && y == 1) || (x == width-2 && y == height-2)) continue;
-            
-            grid[y][x] = '#';
         }
     }
 

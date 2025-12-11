@@ -5,9 +5,9 @@
 #include <vector>
 #include <memory>
 #include <algorithm>
-#include <thread> // 用于剧情文字延时
+#include <thread>
 #include <chrono>
-#include <fstream> // 用于文件读写
+#include <fstream> 
 
 #include "Map.h"
 #include "Player.h"
@@ -24,49 +24,67 @@ private:
     std::vector<std::shared_ptr<Item>> items;
     
     int currentLevel;
-    int difficulty; // 1: 简单, 2: 普通, 3: 困难
-    bool isRunning;
+    int difficulty; 
+
+    void clearScreen() {
+        #ifdef _WIN32
+            system("cls");
+        #else
+            // Mac/Linux 使用 ANSI 转义序列清屏
+            // \033[2J 清除屏幕，\033[1;1H 将光标移回左上角
+            std::cout << "\033[2J\033[1;1H";
+        #endif
+    }
 
 public:
-    Game() : currentLevel(1), difficulty(2), isRunning(true) {
-        // 初始化随机数种子
+    Game() : currentLevel(1), difficulty(2) {
         srand(time(0));
     }
 
-    // --- 1. 游戏主流程控制 ---
+    // --- 1. 游戏主流程控制 (重构版) ---
     void run() {
-        // 1. 显示菜单并获取选择
-        int choice = showMainMenu(); // 修改 showMainMenu 让它返回 int
-        
-        // 2. 根据选择初始化
-        if (choice == 2) {
-            // --- 读档模式 ---
-            initPlayer(); // 先创建一个默认玩家
-            if (!loadGame()) { 
-                // 如果读档失败（文件不存在），转为新游戏
-                currentLevel = 1; 
-                // difficulty 已经在 showMainMenu 设了默认值
-            }
-        } else {
-            // --- 新游戏模式 ---
-            currentLevel = 1;
-            initPlayer();
-        }
-        
-        // 3. 开始循环
-        while (isRunning) {
-            showStory(); 
-            initLevel(); 
-            gameLoop();
+        while (true) { // 【外层循环】：主程序循环
+            // 1. 显示主菜单
+            int choice = showMainMenu();
             
-            if (player->isDead()) {
-                handleGameOver();
-                // 游戏结束时不自动保存，否则玩家就永远死在存档里了
-                // 可以选择删除存档 remove("savegame.txt");
+            if (choice == 3) {
+                // 退出游戏
+                std::cout << "再见，勇士！" << std::endl;
+                break; // 跳出外层循环，程序结束
+            }
+
+            // 2. 根据选择初始化游戏数据
+            bool loadSuccess = false;
+            if (choice == 2) {
+                // 尝试读档
+                loadSuccess = loadGame();
+                if (!loadSuccess) {
+                    // 读档失败，自动转为新游戏，但要重置等级
+                    currentLevel = 1;
+                    initPlayer(); 
+                }
             } else {
-                handleLevelComplete();
-                // 自动存档：每过一关存一次
-                saveGame();
+                // 新游戏
+                currentLevel = 1;
+                initPlayer(); 
+            }
+
+            // 3. 【内层循环】：一局游戏的循环 (Level by Level)
+            bool sessionRunning = true;
+            while (sessionRunning) {
+                showStory();    // 播放剧情
+                initLevel();    // 生成关卡
+                gameLoop();     // 玩这一关 (直到过关或死亡)
+                
+                if (player->isDead()) {
+                    handleGameOver(); 
+                    sessionRunning = false; // 结束这局游戏，跳出内层循环 -> 回到主菜单
+                } else {
+                    // 过关了
+                    handleLevelComplete();
+                    saveGame(); // 自动存档
+                    // sessionRunning 依然为 true，继续下一关循环
+                }
             }
         }
     }
@@ -75,15 +93,12 @@ private:
     // --- 辅助功能：打字机输出 ---
     void typewriterPrint(const std::string& text, int delayMs = 50) {
         bool skip = false;
-        
         for (char c : text) {
             std::cout << c << std::flush;
-            
             if (!skip) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
-                
                 if (Input::hasPending()) {
-                    Input::clearBuffer(); // 消耗掉按下的键（不会再显示在屏幕上了）
+                    Input::clearBuffer(); 
                     skip = true;
                 }
             }
@@ -91,15 +106,93 @@ private:
         std::cout << std::endl; 
     }
 
-    // --- 5. 剧情系统 (升级版) ---
+    // --- 2. 菜单逻辑 ---
+    int showMainMenu() {
+        while (true) {
+            clearScreen();
+            std::cout << "========================================" << std::endl;
+            std::cout << "       地牢传说 (Dungeon Legend)        " << std::endl;
+            std::cout << "========================================" << std::endl;
+            std::cout << "1. 新的游戏 (New Game)" << std::endl;
+            std::cout << "2. 继续征程 (Load Game)" << std::endl;
+            std::cout << "3. 退出游戏 (Exit)" << std::endl;
+            std::cout << "> ";
+            
+            char choice = Input::get();
+            if (choice == '1') {
+                std::cout << "\n请选择难度 (1:萌新 2:普通 3:受苦): ";
+                char diff = Input::get();
+                difficulty = (diff >= '1' && diff <= '3') ? (diff - '0') : 2;
+                return 1;
+            } else if (choice == '2') {
+                return 2;
+            } else if (choice == '3') {
+                return 3;
+            }
+        }
+    }
+
+    // --- 3. 初始化玩家 ---
+    void initPlayer() {
+        // 每次重新开始都创建一个全新的满血玩家对象
+        player = std::make_shared<Player>(1, 1);
+        if (difficulty == 1) player->heal(50); 
+    }
+
+    // 辅助函数：寻找一个合法的空坐标
+    Point getValidSpawnPosition() {
+        int x, y;
+        int attempts = 0;
+        do {
+            x = rand() % (map->getWidth() - 2) + 1;
+            y = rand() % (map->getHeight() - 2) + 1;
+            attempts++;
+            if (attempts > 1000) break; 
+        } while (!map->isWalkable(x, y) || 
+                 (x == 1 && y == 1) || 
+                 (x == map->getWidth()-2 && y == map->getHeight()-2));
+        return {x, y};
+    }
+
+    // --- 4. 关卡生成 ---
+    void initLevel() {
+        int mapW = 20 + currentLevel * 2; 
+        int mapH = 10 + currentLevel;
+        map = std::make_unique<Map>(mapW, mapH);
+        map->generateObstacles(currentLevel);
+
+        player->setPosition(1, 1);
+
+        enemies.clear();
+        enemies.push_back(player); 
+
+        int slimeCount = currentLevel * difficulty + 2; 
+        for(int i=0; i<slimeCount; ++i) {
+            Point p = getValidSpawnPosition();
+            enemies.push_back(std::make_shared<Slime>(p.x, p.y));
+        }
+
+        if (difficulty == 3 || currentLevel >= 3) {
+             Point p = getValidSpawnPosition();
+             enemies.push_back(std::make_shared<Dragon>(p.x, p.y));
+        }
+
+        items.clear();
+        Point potionPos = getValidSpawnPosition();
+        items.push_back(std::make_shared<Potion>(potionPos.x, potionPos.y));
+        
+        if (currentLevel % 2 == 0) { 
+            Point swordPos = getValidSpawnPosition();
+            items.push_back(std::make_shared<Sword>(swordPos.x, swordPos.y));
+        }
+    }
+
+    // --- 5. 剧情系统 ---
     void showStory() {
-        system("cls"); // Mac/Linux use system("clear")
+        clearScreen();
         std::cout << Color::CYAN << "----------------------------------------" << std::endl;
         std::cout << "           第 " << currentLevel << " 层" << std::endl;
         std::cout << "----------------------------------------" << Color::RESET << std::endl;
-        
-        // 使用打字机效果输出剧情
-        // 确保每行文字都作为单独的字符串传入，这样每行都有机会暂停
         
         if (currentLevel == 1) {
             typewriterPrint("你踏入了阴暗的地下城，手中紧握着生锈的铁剑。");
@@ -118,143 +211,40 @@ private:
         }
         
         std::cout << Color::GREY << "\n(按任意键开始战斗...)" << Color::RESET << std::endl;
-        Input::get(); // 等待玩家准备好
-    }
-    // 辅助函数：寻找一个合法的空坐标
-    Point getValidSpawnPosition() {
-        int x, y;
-        int attempts = 0;
-        do {
-            x = rand() % (map->getWidth() - 2) + 1;
-            y = rand() % (map->getHeight() - 2) + 1;
-            attempts++;
-            
-            // 防止死循环（虽然极小概率，但为了健壮性）
-            if (attempts > 1000) break; 
-            
-            // 规则：
-            // 1. 必须是地板 (isWalkable)
-            // 2. 不能是玩家起点 (1,1)
-            // 3. 不能是出口 (Width-2, Height-2)
-            // 4. (可选) 最好不要和已有的物品重叠，暂略
-        } while (!map->isWalkable(x, y) || 
-                 (x == 1 && y == 1) || 
-                 (x == map->getWidth()-2 && y == map->getHeight()-2));
-        
-        return {x, y};
-    }
-    // --- 2. 菜单与自定义选项 ---
-    int showMainMenu() {
-        while (true) {
-            system("cls");
-            std::cout << "========================================" << std::endl;
-            std::cout << "       地牢传说 (Dungeon Legend)        " << std::endl;
-            std::cout << "========================================" << std::endl;
-            std::cout << "1. 新的游戏 (New Game)" << std::endl;
-            std::cout << "2. 继续征程 (Load Game)" << std::endl;
-            std::cout << "3. 退出游戏 (Exit)" << std::endl;
-            std::cout << "> ";
-            
-            char choice = Input::get();
-            if (choice == '1') {
-                // 如果是新游戏，才问难度
-                std::cout << "\n请选择难度 (1:萌新 2:普通 3:受苦): ";
-                char diff = Input::get();
-                difficulty = (diff >= '1' && diff <= '3') ? (diff - '0') : 2;
-                return 1;
-            } else if (choice == '2') {
-                return 2;
-            } else if (choice == '3') {
-                exit(0);
-            }
-        }
+        Input::get(); 
     }
 
-    // --- 3. 初始化玩家 ---
-    void initPlayer() {
-        player = std::make_shared<Player>(1, 1);
-        // 根据难度调整初始状态，这里简单演示
-        if (difficulty == 1) player->heal(50); // 简单模式加血
-    }
-
-    // --- 4. 关卡生成 (核心算法) ---
-    // --- 4. 关卡生成 (修复后) ---
-    void initLevel() {
-        // 1. 生成地图
-        int mapW = 20 + currentLevel * 2; 
-        int mapH = 10 + currentLevel;
-        map = std::make_unique<Map>(mapW, mapH);
-        
-        // 加入随机障碍物
-        map->generateObstacles(currentLevel);
-
-        // 2. 重置玩家位置
-        player->setPosition(1, 1);
-
-        // 3. 生成敌人 (使用安全坐标)
-        enemies.clear();
-        enemies.push_back(player); 
-
-        int slimeCount = currentLevel * difficulty + 2; 
-        for(int i=0; i<slimeCount; ++i) {
-            Point p = getValidSpawnPosition();
-            enemies.push_back(std::make_shared<Slime>(p.x, p.y));
-        }
-
-        // 生成巨龙
-        if (difficulty == 3 || currentLevel >= 3) {
-             Point p = getValidSpawnPosition();
-             enemies.push_back(std::make_shared<Dragon>(p.x, p.y));
-        }
-
-        // 4. 生成物品 (关键修复点！)
-        items.clear();
-        
-        // 生成药水
-        Point potionPos = getValidSpawnPosition();
-        items.push_back(std::make_shared<Potion>(potionPos.x, potionPos.y));
-        
-        // 生成武器
-        if (currentLevel % 2 == 0) { 
-            Point swordPos = getValidSpawnPosition();
-            items.push_back(std::make_shared<Sword>(swordPos.x, swordPos.y));
-        }
-    }
-
-    // --- 6. 游戏内循环 (原 main 函数的逻辑) ---
+    // --- 6. 游戏内循环 ---
     void gameLoop() {
         bool levelRunning = true;
+        // 只要本关没结束，且玩家没死，就一直循环
         while (levelRunning && !player->isDead()) {
-            // ... (这里复制原 main.cpp 中的 渲染 -> 输入 -> 逻辑 代码) ...
-            // 为了节省篇幅，这里简写，你需要把之前的逻辑搬进来
-            
-            // 渲染
+            // 1. 渲染
             std::vector<GameObject*> renderList;
             for (const auto& i : items) renderList.push_back(i.get());
             for (const auto& c : enemies) renderList.push_back(c.get());
             map->draw(renderList);
 
-            // UI
+            // 2. UI
             std::cout << "LV: " << currentLevel << " | DIFF: " << difficulty << std::endl;
             std::cout << player->getStatsString() << std::endl;
-             // 显示日志...
-             int logSize = MessageLog::getLogs().size();
-             int start = (logSize > 5) ? (logSize - 5) : 0;
-             for (int i = start; i < logSize; ++i) std::cout << MessageLog::getLogs()[i] << std::endl;
+            int logSize = MessageLog::getLogs().size();
+            int start = (logSize > 5) ? (logSize - 5) : 0;
+            for (int i = start; i < logSize; ++i) std::cout << MessageLog::getLogs()[i] << std::endl;
 
-            // 检查过关
+            // 3. 检查过关
             Point pPos = player->getPosition();
             if (pPos.x == map->getWidth() - 2 && pPos.y == map->getHeight() - 2) {
-                levelRunning = false; // 跳出当前层循环，进入下一层
+                levelRunning = false; 
                 return;
             }
 
-            // 玩家回合
+            // 4. 玩家回合
             std::vector<Creature*> activeCreatures;
             for(const auto& c : enemies) activeCreatures.push_back(c.get());
             player->onTurn(*map, activeCreatures);
 
-            // 物品拾取
+            // 5. 物品拾取
              for (auto it = items.begin(); it != items.end(); ) {
                 if ((*it)->getPosition() == player->getPosition()) {
                     if ((*it)->onPickUp(player.get())) {
@@ -265,14 +255,14 @@ private:
                 ++it;
             }
 
-            // 敌人回合
+            // 6. 敌人回合
             for (auto& c : enemies) {
                 if (c.get() != player.get() && !c->isDead()) {
                     c->onTurn(*map, activeCreatures);
                 }
             }
 
-            // 清理尸体
+            // 7. 清理尸体
              enemies.erase(
                 std::remove_if(enemies.begin(), enemies.end(), 
                     [this](const std::shared_ptr<Creature>& c) {
@@ -283,46 +273,45 @@ private:
         }
     }
 
+    void handleGameOver() {
+        std::cout << Color::RED << "\n胜败乃兵家常事。大侠请重新来过。" << Color::RESET << std::endl;
+        std::cout << "按任意键返回主菜单...";
+        Input::get(); 
+        // 这里不需要做任何事，函数结束后会回到 run() 的内层循环判断，
+        // 因为 player->isDead() 为真，sessionRunning 会被设为 false，从而跳回主菜单
+    }
+
+    void handleLevelComplete() {
+        currentLevel++;
+        std::cout << Color::YELLOW << "恭喜通过第 " << (currentLevel-1) << " 层！" << Color::RESET << std::endl;
+    }
+
     // --- 7. 存档功能 ---
     void saveGame() {
-        std::ofstream outFile("savegame.txt"); // 创建/覆盖文件
+        std::ofstream outFile("savegame.txt"); 
         if (outFile.is_open()) {
-            // 序列化数据：用空格分隔
             outFile << currentLevel << " "
                     << difficulty << " "
                     << player->getHp() << " "
                     << player->getMaxHp() << " "
-                    // 注意：我们需要在 Player 类加一个 getAttack()，或者直接把 attackPower 设为 public
-                    // 为了 OOP 封装性，建议去 Player.h 加一个 getAttack()。
-                    // 这里假设你已经加了，或者暂时用 player->attackPower (如果改了权限)
                     << player->getAttack(); 
-            
             outFile.close();
             MessageLog::add(Color::YELLOW + ">>> 游戏进度已保存！ <<<" + Color::RESET);
-        } else {
-            MessageLog::add(Color::RED + "错误：无法写入存档文件！" + Color::RESET);
         }
     }
 
     // --- 8. 读档功能 ---
-    // 返回 true 表示读取成功
     bool loadGame() {
         std::ifstream inFile("savegame.txt");
         if (inFile.is_open()) {
             int hp, maxHp, atk;
-            
-            // 按照写入的顺序读取
             inFile >> currentLevel >> difficulty >> hp >> maxHp >> atk;
             
-            // 恢复玩家状态
-            // 注意：这里需要确保 player 对象已经创建。
-            // 我们会在调用 loadGame 前先 initPlayer，然后用读取的数据覆盖它。
             if (!player) player = std::make_shared<Player>(1, 1);
-            
-            player->setStats(hp, maxHp, atk); // 需要在 Player.h 实现这个 setter
+            player->setStats(hp, maxHp, atk); 
             
             inFile.close();
-            std::cout << ">>> 存档读取成功！欢迎回来，勇士。 <<<" << std::endl;
+            std::cout << ">>> 存档读取成功！ <<<" << std::endl;
             std::this_thread::sleep_for(std::chrono::seconds(1));
             return true;
         } else {
@@ -330,18 +319,6 @@ private:
             std::this_thread::sleep_for(std::chrono::seconds(1));
             return false;
         }
-    }
-
-    void handleGameOver() {
-        std::cout << Color::RED << "胜败乃兵家常事。大侠请重新来过。" << Color::RESET << std::endl;
-        isRunning = false;
-        Input::get();
-    }
-
-    void handleLevelComplete() {
-        currentLevel++;
-        std::cout << Color::YELLOW << "恭喜通过第 " << (currentLevel-1) << " 层！" << Color::RESET << std::endl;
-        // 这里可以增加存档逻辑：saveGame();
     }
 };
 
