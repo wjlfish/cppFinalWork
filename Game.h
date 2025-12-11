@@ -9,6 +9,7 @@
 #include <chrono>
 #include <fstream> 
 #include <cstdio> // 用于 remove 删除存档文件
+#include <sstream>
 
 #include "Map.h"
 #include "Player.h"
@@ -30,10 +31,48 @@ private:
     
     int currentLevel;
     int difficulty; 
-    int gameMode; // 【新增】当前游戏模式
+    int gameMode;
+
+    // --- 辅助功能：XOR 加密/解密算法 ---
+
+    std::string xorCipher(std::string data) {
+        const std::string key = "bukeyixiugaizhegekeyyinweizhegekeyshibaozhengwanjiabunengzuobideguanjianyinsu39fh319cb93bcv92buev";
+        std::string result = data;
+        
+        for (size_t i = 0; i < data.size(); i++) {
+            // 利用取模运算循环使用密钥的每一个字符进行异或
+            result[i] = data[i] ^ key[i % key.size()];
+        }
+        return result;
+    }
+
+    int currentSlot; // 【新增】记录当前存档槽位 (1, 2, 3...)
+
+    // 【新增】根据槽位生成文件名
+    std::string getSaveFileName(int slot) const {
+        return "saves/savegame_" + std::to_string(slot) + ".dat";
+    }
+
+    // 【新增】辅助UI：让玩家选择槽位
+    int askForSaveSlot() {
+        std::cout << "\n请选择存档槽位 (1 - 3):\n";
+        // 简单的检查文件是否存在，给玩家一点提示（可选优化）
+        for (int i = 1; i <= 3; ++i) {
+            std::ifstream f(getSaveFileName(i));
+            std::cout << i << ". 槽位 " << i;
+            if (f.good()) std::cout << " [已有存档]";
+            else std::cout << " [空]";
+            std::cout << std::endl;
+        }
+        std::cout << "> " << std::flush;
+        
+        char c = Input::get();
+        if (c >= '1' && c <= '3') return c - '0';
+        return 1; // 默认返回槽位 1
+    }
 
 public:
-    Game() : currentLevel(1), difficulty(2), gameMode(MODE_STORY) {
+    Game() : currentLevel(1), difficulty(2), gameMode(MODE_STORY), currentSlot(1) {
         srand(time(0));
     }
 
@@ -81,7 +120,7 @@ public:
                         handleVictory(); // 播放胜利结局
                         sessionRunning = false; // 结束会话，回到主菜单
                         // 通关后删除存档，防止玩家读档继续打第六关
-                        std::remove("savegame.txt");
+                        std::remove(getSaveFileName(currentSlot).c_str());
                     } else {
                         // 普通过关
                         handleLevelComplete();
@@ -129,19 +168,25 @@ private:
             std::cout << "> " << std::flush;
             
             char choice = Input::get();
+            
             if (choice == '1') {
-                // 1. 选难度
+                // 1. 先选槽位 (为了确定往哪里存)
+                currentSlot = askForSaveSlot();
+
+                // 2. 选难度
                 std::cout << "\n请选择难度 (1:萌新 2:普通 3:受苦): " << std::flush;
                 char diff = Input::get();
                 difficulty = (diff >= '1' && diff <= '3') ? (diff - '0') : 2;
 
-                // 2. 选模式 【新增】
-                std::cout << "\n请选择模式:\n1. 剧情闯关 (挑战5层深渊)\n2. 无尽挑战 (至死方休)\n> " << std::flush;
+                // 3. 选模式
+                std::cout << "\n请选择模式 (1:剧情 2:无尽): " << std::flush;
                 char mode = Input::get();
                 gameMode = (mode == '2') ? MODE_INFINITE : MODE_STORY;
 
                 return 1;
             } else if (choice == '2') {
+                // 读取时，直接问要读哪个槽位
+                currentSlot = askForSaveSlot();
                 return 2;
             } else if (choice == '3') {
                 return 3;
@@ -294,7 +339,7 @@ private:
         std::cout << "按任意键返回主菜单...";
         Input::get(); 
         // 游戏结束，删除存档
-        std::remove("savegame.txt");
+        std::remove(getSaveFileName(currentSlot).c_str());
     }
 
     // 【新增】胜利结局处理
@@ -311,6 +356,7 @@ private:
         
         std::cout << "按任意键返回主菜单...";
         Input::get(); 
+        std::remove(getSaveFileName(currentSlot).c_str());
     }
 
     void handleLevelComplete() {
@@ -321,36 +367,64 @@ private:
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
-    // --- 存档功能 (更新：加入 gameMode) ---
+    // --- 7. 存档功能 (加密版) ---
     void saveGame() {
-        std::ofstream outFile("savegame.txt"); 
+        // 1. 序列化：将所有数据拼接成一个字符串
+        std::stringstream ss;
+        ss << currentLevel << " "
+           << difficulty << " "
+           << player->getHp() << " "
+           << player->getMaxHp() << " "
+           << player->getAttack() << " "
+           << gameMode;
+        
+        std::string rawData = ss.str();
+        
+        // 2. 加密
+        std::string encryptedData = xorCipher(rawData);
+        
+        // 3. 写入文件 (注意：使用 .dat 后缀，且开启 binary 模式)
+        std::ofstream outFile(getSaveFileName(currentSlot), std::ios::binary); 
+        
         if (outFile.is_open()) {
-            outFile << currentLevel << " "
-                    << difficulty << " "
-                    << player->getHp() << " "
-                    << player->getMaxHp() << " "
-                    << player->getAttack() << " "
-                    << gameMode; // 【新增】保存模式
+            outFile.write(encryptedData.c_str(), encryptedData.size());
             outFile.close();
-            MessageLog::add(Color::YELLOW + ">>> 游戏进度已保存！ <<<" + Color::RESET);
+            // 提示信息里带上槽位号
+            MessageLog::add(Color::YELLOW + ">>> 进度已保存至槽位 " + std::to_string(currentSlot) + " <<<" + Color::RESET);
+        } else {
+            MessageLog::add(Color::RED + "错误：无法写入存档文件！" + Color::RESET);
         }
     }
 
-    // --- 读档功能 (更新：读取 gameMode) ---
+    // --- 8. 读档功能 (解密版) ---
     bool loadGame() {
-        std::ifstream inFile("savegame.txt");
+        // 1. 以二进制模式打开
+        std::ifstream inFile(getSaveFileName(currentSlot), std::ios::binary);
+        
         if (inFile.is_open()) {
-            int hp, maxHp, atk;
-            // 【新增】读取 gameMode，注意顺序必须和 save 一致
-            inFile >> currentLevel >> difficulty >> hp >> maxHp >> atk >> gameMode;
-            
-            if (!player) player = std::make_shared<Player>(1, 1);
-            player->setStats(hp, maxHp, atk); 
-            
+            // 2. 读取整个文件内容到 string
+            std::stringstream buffer;
+            buffer << inFile.rdbuf();
+            std::string encryptedData = buffer.str();
             inFile.close();
-            std::cout << ">>> 存档读取成功！模式: " << (gameMode == MODE_STORY ? "剧情" : "无尽") << " <<<" << std::endl;
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-            return true;
+            
+            std::string decryptedData = xorCipher(encryptedData);
+            std::stringstream ss(decryptedData);
+            int hp, maxHp, atk;
+            
+            if (ss >> currentLevel >> difficulty >> hp >> maxHp >> atk >> gameMode) {
+                if (!player) player = std::make_shared<Player>(1, 1);
+                player->setStats(hp, maxHp, atk); 
+                
+                std::cout << ">>> 载入槽位 " << currentSlot << " 成功！ <<<" << std::endl;
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                return true;
+            } else {
+                // 如果解密后数据格式不对（说明文件被篡改或损坏）
+                std::cout << Color::RED << "存档文件损坏或被篡改！" << Color::RESET << std::endl;
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                return false;
+            }
         } else {
             std::cout << Color::RED << "没有找到存档文件！" << Color::RESET << std::endl;
             std::this_thread::sleep_for(std::chrono::seconds(1));
